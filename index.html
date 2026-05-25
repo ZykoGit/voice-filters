@@ -456,29 +456,27 @@ let aiModels = {
 };
 
 async function loadAIModels() {
-  statusEl.textContent = "Loading AI models…";
+  modelStatus.textContent = "AI Models: Loading…";
 
-  // Enable WebGPU if available
-  ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
+  try {
+    aiModels.encoder = await ort.InferenceSession.create("./models/encoder.onnx", {
+      executionProviders: ["webgpu", "wasm"]
+    });
 
-  // Load models (you will replace these filenames later)
-  aiModels.encoder = await ort.InferenceSession.create("./models/encoder.onnx", {
-    executionProviders: ["webgpu", "wasm"]
-  });
+    aiModels.decoder = await ort.InferenceSession.create("./models/decoder.onnx", {
+      executionProviders: ["webgpu", "wasm"]
+    });
 
-  aiModels.decoder = await ort.InferenceSession.create("./models/decoder.onnx", {
-    executionProviders: ["webgpu", "wasm"]
-  });
+    aiModels.extractor = await ort.InferenceSession.create("./models/extractor.onnx", {
+      executionProviders: ["webgpu", "wasm"]
+    });
 
-  aiModels.extractor = await ort.InferenceSession.create("./models/extractor.onnx", {
-    executionProviders: ["webgpu", "wasm"]
-  });
-
-  statusEl.textContent = "AI models async function convertWithAI(inputBuffer) {
-  if (!aiModels.encoder || !aiModels.decoder || !aiModels.extractor) {
-    statusEl.textContent = "AI models not loaded yet.";
-    return inputBuffer;
+    modelStatus.textContent = "AI Models: Ready";
+  } catch (err) {
+    modelStatus.textContent = "AI Models: Failed to load";
+    console.error(err);
   }
+}
 
   statusEl.textContent = "Extracting features…";
 
