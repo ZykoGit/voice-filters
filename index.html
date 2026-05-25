@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Voice Filters</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+  :root {
+    --bg: #0f0f0f;
+    --fg: #f2f2f2;
+    --accent: #4caf50;
+    --accent2: #3a8ad3;
+    --card: #1a1a1a;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    gap: 20px;
+  }
+
+  h1 {
+    margin-top: 10px;
+    font-size: 1.8rem;
+    text-align: center;
+  }
+
+  .controls {
+    width: 100%;
+    max-width: 420px;
+    background: var(--card);
+    padding: 20px;
+    border-radius: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  button {
+    padding: 14px;
+    border-radius: 12px;
+    border: none;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: white;
+    cursor: pointer;
+    transition: 0.2s;
+  }
+
+  #recordBtn { background: var(--accent); }
+  #playBtn { background: var(--accent2); }
+
+  button:active {
+    transform: scale(0.96);
+  }
+
+  input[type="range"] {
+    width: 100%;
+  }
+
+  /* Filter selector */
+  .filter-container {
+    width: 100%;
+    max-width: 420px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .filter-slider {
+    display: flex;
+    transition: transform 0.35s ease;
+  }
+
+  .filter {
+    min-width: 100%;
+    padding: 20px;
+    background: var(--card);
+    border-radius: 16px;
+    text-align: center;
+    font-size: 1.3rem;
+    user-select: none;
+  }
+
+  .filter-nav {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    margin-top: -10px;
+  }
+
+  .nav-dot {
+    width: 12px;
+    height: 12px;
+    background: #444;
+    border-radius: 50%;
+    transition: 0.2s;
+  }
+
+  .nav-dot.active {
+    background: var(--accent);
+  }
+</style>
+</head>
+
+<body>
+
+<h1>Voice Filters</h1>
+
+<div class="filter-container">
+  <div class="filter-slider" id="filterSlider">
+    <div class="filter">Villager</div>
+    <div class="filter">Robot</div>
+    <div class="filter">Demon</div>
+  </div>
+</div>
+
+<div class="filter-nav">
+  <div class="nav-dot active"></div>
+  <div class="nav-dot"></div>
+  <div class="nav-dot"></div>
+</div>
+
+<div class="controls">
+  <button id="recordBtn">🎙️ Record</button>
+  <button id="playBtn" disabled>▶️ Play</button>
+  <input type="range" id="seekBar" value="0" min="0" max="100">
+</div>
+
+<script>
+let audioContext;
+let mediaStream;
+let recorder;
+let recordedChunks = [];
+let audioBuffer;
+let currentFilter = 0;
+
+// Filter slider logic
+const slider = document.getElementById("filterSlider");
+const dots = document.querySelectorAll(".nav-dot");
+
+dots.forEach((dot, i) => {
+  dot.onclick = () => {
+    currentFilter = i;
+    slider.style.transform = `translateX(-${i * 100}%)`;
+    dots.forEach(d => d.classList.remove("active"));
+    dot.classList.add("active");
+  };
+});
+
+// Recording
+const recordBtn = document.getElementById("recordBtn");
+recordBtn.onclick = async () => {
+  if (!mediaStream) {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  }
+
+  recordedChunks = [];
+  recorder = new MediaRecorder(mediaStream);
+
+  recorder.ondataavailable = e => recordedChunks.push(e.data);
+  recorder.onstop = async () => {
+    const blob = new Blob(recordedChunks, { type: "audio/webm" });
+    const arrayBuffer = await blob.arrayBuffer();
+    audioContext = new AudioContext();
+    audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    document.getElementById("playBtn").disabled = false;
+  };
+
+  recorder.start();
+  recordBtn.textContent = "⏹️ Stop";
+  recordBtn.onclick = () => {
+    recorder.stop();
+    recordBtn.textContent = "🎙️ Record";
+    recordBtn.onclick = async () => recordBtn.onclick();
+  };
+};
+
+// Play with filter
+const playBtn = document.getElementById("playBtn");
+const seekBar = document.getElementById("seekBar");
+
+playBtn.onclick = () => {
+  if (!audioBuffer) return;
+
+  audioContext = new AudioContext();
+  const src = audioContext.createBufferSource();
+  src.buffer = audioBuffer;
+
+  let node = src;
+
+  if (currentFilter === 0) {
+    node = applyVillager(node);
+  }
+
+  node.connect(audioContext.destination);
+  src.start();
+
+  const duration = audioBuffer.duration;
+  const interval = setInterval(() => {
+    if (audioContext.state === "closed") return clearInterval(interval);
+    const t = audioContext.currentTime;
+    seekBar.value = (t / duration) * 100;
+    if (t >= duration) clearInterval(interval);
+  }, 50);
+};
+
+// Villager filter
+function applyVillager(source) {
+  const lowpass = audioContext.createBiquadFilter();
+  lowpass.type = "lowpass";
+  lowpass.frequency.value = 1800;
+
+  const bandpass = audioContext.createBiquadFilter();
+  bandpass.type = "bandpass";
+  bandpass.frequency.value = 600;
+  bandpass.Q.value = 1.2;
+
+  const analyser = audioContext.createAnalyser();
+  analyser.fftSize = 512;
+  const data = new Uint8Array(analyser.frequencyBinCount);
+
+  const script = audioContext.createScriptProcessor(512, 1, 1);
+  script.onaudioprocess = () => {
+    analyser.getByteTimeDomainData(data);
+    let max = 0;
+    for (let i = 0; i < data.length; i++) {
+      const v = Math.abs(data[i] - 128);
+      if (v > max) max = v;
+    }
+    if (max > 40) triggerPff();
+  };
+
+  source.connect(lowpass).connect(bandpass).connect(analyser).connect(script).connect(audioContext.destination);
+  return source;
+}
+
+function triggerPff() {
+  const length = 0.1 * audioContext.sampleRate;
+  const buffer = audioContext.createBuffer(1, length, audioContext.sampleRate);
+  const data = buffer.getChannelData(0);
+
+  for (let i = 0; i < length; i++) {
+    data[i] = Math.random() * 2 - 1;
+  }
+
+  const src = audioContext.createBufferSource();
+  src.buffer = buffer;
+
+  const lp = audioContext.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = 500;
+
+  const gain = audioContext.createGain();
+  const now = audioContext.currentTime;
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.6, now + 0.005);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+
+  src.connect(lp).connect(gain).connect(audioContext.destination);
+  src.start();
+}
+</script>
+
+</body>
+</html>
