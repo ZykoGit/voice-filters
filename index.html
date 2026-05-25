@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <title>Voice Filters</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<!-- ONNX Runtime Web (AI engine) -->
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
 
 <style>
@@ -176,14 +178,6 @@
     box-shadow: 0 0 0 4px rgba(58,138,211,0.25);
   }
 
-  input[type="range"]::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: var(--accent2);
-    cursor: pointer;
-  }
-
   .time-label {
     font-size: 0.75rem;
     opacity: 0.7;
@@ -195,11 +189,6 @@
     font-size: 0.8rem;
     opacity: 0.8;
     text-align: center;
-  }
-
-  @media (max-width: 480px) {
-    h1 { font-size: 1.6rem; }
-    .controls { padding: 16px 14px 14px; }
   }
 </style>
 </head>
@@ -214,17 +203,17 @@
     <div class="filter">
       <div class="filter-title">Villager (DSP)</div>
       <div class="filter-tag">Local • Filters + Noise</div>
-      <div class="filter-desc">Muffled, nasal tone with little “pff” bursts on plosives. Pure WebAudio, no AI.</div>
+      <div class="filter-desc">Muffled, nasal tone with “pff” bursts on plosives.</div>
     </div>
     <div class="filter">
       <div class="filter-title">Villager (AI)</div>
-      <div class="filter-tag">Planned • WebGPU</div>
-      <div class="filter-desc">True voice conversion model running in your browser. This slot is ready for ONNX/WebGPU.</div>
+      <div class="filter-tag">WebGPU • Coming Soon</div>
+      <div class="filter-desc">True voice conversion model running in your browser.</div>
     </div>
     <div class="filter">
       <div class="filter-title">Robot</div>
-      <div class="filter-tag">Local • Coming soon</div>
-      <div class="filter-desc">Metallic, bit‑crushed, and slightly flanged. Placeholder for another fun filter.</div>
+      <div class="filter-tag">Local • Coming Soon</div>
+      <div class="filter-desc">Metallic, bit‑crushed, flanged.</div>
     </div>
   </div>
 </div>
@@ -248,24 +237,47 @@
 
   <div class="status" id="status">Idle</div>
   <div class="status" id="modelStatus">AI Models: Loading…</div>
-
-
 </div>
 
 <script>
-let audioContext;
-let mediaStream;
-let recorder;
-let recordedChunks = [];
-let rawAudioBuffer = null;
-let processedAudioBuffer = null;
-let currentFilterIndex = 0;
-let playSource = null;
-let seekInterval = null;
+/* ------------------------------
+   AI MODEL LOADER
+------------------------------ */
+let aiModels = {
+  encoder: null,
+  decoder: null,
+  extractor: null
+};
 
-// ----- Filter slider -----
+async function loadAIModels() {
+  modelStatus.textContent = "AI Models: Loading…";
+
+  try {
+    aiModels.encoder = await ort.InferenceSession.create("./models/encoder.onnx", {
+      executionProviders: ["webgpu", "wasm"]
+    });
+
+    aiModels.decoder = await ort.InferenceSession.create("./models/decoder.onnx", {
+      executionProviders: ["webgpu", "wasm"]
+    });
+
+    aiModels.extractor = await ort.InferenceSession.create("./models/extractor.onnx", {
+      executionProviders: ["webgpu", "wasm"]
+    });
+
+    modelStatus.textContent = "AI Models: Ready";
+  } catch (err) {
+    console.error(err);
+    modelStatus.textContent = "AI Models: Failed to load";
+  }
+}
+
+/* ------------------------------
+   FILTER SLIDER
+------------------------------ */
 const slider = document.getElementById("filterSlider");
 const dots = document.querySelectorAll(".nav-dot");
+let currentFilterIndex = 0;
 
 dots.forEach((dot, i) => {
   dot.onclick = () => {
@@ -276,7 +288,18 @@ dots.forEach((dot, i) => {
   };
 });
 
-// ----- Recording -----
+/* ------------------------------
+   RECORDING
+------------------------------ */
+let audioContext;
+let mediaStream;
+let recorder;
+let recordedChunks = [];
+let rawAudioBuffer = null;
+let processedAudioBuffer = null;
+let playSource = null;
+let seekInterval = null;
+
 const recordBtn = document.getElementById("recordBtn");
 const playBtn = document.getElementById("playBtn");
 const seekBar = document.getElementById("seekBar");
@@ -313,7 +336,9 @@ recordBtn.onclick = async () => {
   };
 };
 
-// ----- Play with selected filter -----
+/* ------------------------------
+   PLAYBACK + FILTERS
+------------------------------ */
 playBtn.onclick = async () => {
   if (!rawAudioBuffer) return;
 
@@ -321,14 +346,8 @@ playBtn.onclick = async () => {
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
   }
 
-  if (playSource) {
-    playSource.stop();
-    playSource = null;
-  }
-  if (seekInterval) {
-    clearInterval(seekInterval);
-    seekInterval = null;
-  }
+  if (playSource) playSource.stop();
+  if (seekInterval) clearInterval(seekInterval);
 
   statusEl.textContent = "Processing…";
 
@@ -337,9 +356,7 @@ playBtn.onclick = async () => {
   if (currentFilterIndex === 0) {
     bufferToPlay = await applyVillagerDSP(rawAudioBuffer);
   } else if (currentFilterIndex === 1) {
-    bufferToPlay = await convertWithAI(rawAudioBuffer); // placeholder
-  } else {
-    bufferToPlay = rawAudioBuffer;
+    bufferToPlay = await convertWithAI(rawAudioBuffer);
   }
 
   processedAudioBuffer = bufferToPlay;
@@ -356,10 +373,6 @@ playBtn.onclick = async () => {
   statusEl.textContent = "Playing…";
 
   seekInterval = setInterval(() => {
-    if (!audioContext || audioContext.state === "closed") {
-      clearInterval(seekInterval);
-      return;
-    }
     const t = audioContext.currentTime - startTime;
     const clamped = Math.max(0, Math.min(duration, t));
     seekBar.value = (clamped / duration) * 100;
@@ -376,7 +389,9 @@ playBtn.onclick = async () => {
   };
 };
 
-// ----- Villager DSP filter (local, no AI) -----
+/* ------------------------------
+   DSP VILLAGER FILTER
+------------------------------ */
 async function applyVillagerDSP(inputBuffer) {
   const ctx = audioContext;
   const offline = new OfflineAudioContext(
@@ -409,9 +424,7 @@ async function applyVillagerDSP(inputBuffer) {
       const v = Math.abs(data[i] - 128);
       if (v > max) max = v;
     }
-    if (max > 40) {
-      triggerPff(offline);
-    }
+    if (max > 40) triggerPff(offline);
   };
 
   src.connect(lowpass).connect(bandpass).connect(analyser).connect(script).connect(offline.destination);
@@ -447,80 +460,9 @@ function triggerPff(ctx) {
   src.start();
 }
 
-// ------------------------------
-// AI MODEL LOADER
-// ------------------------------
-let aiModels = {
-  encoder: null,
-  decoder: null,
-  extractor: null
-};
-
-const modelStatus = document.getElementById("modelStatus"); // make sure this element exists in HTML
-
-async function loadAIModels() {
-  modelStatus.textContent = "AI Models: Loading…";
-
-  try {
-    // Optional: configure ORT paths if needed
-    // ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
-
-    aiModels.encoder = await ort.InferenceSession.create("./models/encoder.onnx", {
-      executionProviders: ["webgpu", "wasm"]
-    });
-
-    aiModels.decoder = await ort.InferenceSession.create("./models/decoder.onnx", {
-      executionProviders: ["webgpu", "wasm"]
-    });
-
-    aiModels.extractor = await ort.InferenceSession.create("./models/extractor.onnx", {
-      executionProviders: ["webgpu", "wasm"]
-    });
-
-    modelStatus.textContent = "AI Models: Ready";
-  } catch (err) {
-    console.error(err);
-    modelStatus.textContent = "AI Models: Failed to load";
-  }
-}
-
-  statusEl.textContent = "Extracting features…";
-
-  // Convert AudioBuffer → Float32 PCM
-  const pcm = inputBuffer.getChannelData(0);
-
-  // Run feature extractor model
-  const extractorInput = new ort.Tensor("float32", pcm, [1, pcm.length]);
-  const extractorOutput = await aiModels.extractor.run({ input: extractorInput });
-  const features = extractorOutput.output.data;
-
-  statusEl.textContent = "Running encoder…";
-
-  // Run encoder
-  const encoderInput = new ort.Tensor("float32", features, [1, features.length]);
-  const encoderOutput = await aiModels.encoder.run({ input: encoderInput });
-  const latent = encoderOutput.output.data;
-
-  statusEl.textContent = "Running decoder…";
-
-  // Run decoder
-  const decoderInput = new ort.Tensor("float32", latent, [1, latent.length]);
-  const decoderOutput = await aiModels.decoder.run({ input: decoderInput });
-  const pcmOut = decoderOutput.output.data;
-
-  statusEl.textContent = "AI filter applied.";
-
-  // Convert PCM → AudioBuffer
-  const outputBuffer = audioContext.createBuffer(
-    1,
-    pcmOut.length,
-    inputBuffer.sampleRate
-  );
-  outputBuffer.getChannelData(0).set(pcmOut);
-
-  return outputBuffer;
-}
-
+/* ------------------------------
+   AI FILTER (READY FOR MODELS)
+------------------------------ */
 async function convertWithAI(inputBuffer) {
   if (!aiModels.encoder || !aiModels.decoder || !aiModels.extractor) {
     statusEl.textContent = "AI models not loaded yet.";
@@ -529,29 +471,24 @@ async function convertWithAI(inputBuffer) {
 
   statusEl.textContent = "AI: Extracting features…";
 
-  // 1. AudioBuffer → Float32 PCM (mono)
   const pcm = inputBuffer.getChannelData(0);
   const extractorInput = new ort.Tensor("float32", pcm, [1, pcm.length]);
 
-  // 2. Feature extractor
   const featOut = await aiModels.extractor.run({ input: extractorInput });
   const features = featOut[Object.keys(featOut)[0]].data;
 
   statusEl.textContent = "AI: Encoding…";
 
-  // 3. Encoder
   const encInput = new ort.Tensor("float32", features, [1, features.length]);
   const encOut = await aiModels.encoder.run({ input: encInput });
   const latent = encOut[Object.keys(encOut)[0]].data;
 
   statusEl.textContent = "AI: Decoding…";
 
-  // 4. Decoder
   const decInput = new ort.Tensor("float32", latent, [1, latent.length]);
   const decOut = await aiModels.decoder.run({ input: decInput });
   const pcmOut = decOut[Object.keys(decOut)[0]].data;
 
-  // 5. PCM → AudioBuffer
   const outBuf = audioContext.createBuffer(
     1,
     pcmOut.length,
@@ -563,7 +500,9 @@ async function convertWithAI(inputBuffer) {
   return outBuf;
 }
 
-
+/* ------------------------------
+   INIT
+------------------------------ */
 loadAIModels();
 </script>
 
