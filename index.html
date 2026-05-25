@@ -249,6 +249,7 @@
   <div class="status" id="status">Idle</div>
   <div class="status" id="modelStatus">AI Models: Loading…</div>
 
+
 </div>
 
 <script>
@@ -455,10 +456,15 @@ let aiModels = {
   extractor: null
 };
 
+const modelStatus = document.getElementById("modelStatus"); // make sure this element exists in HTML
+
 async function loadAIModels() {
   modelStatus.textContent = "AI Models: Loading…";
 
   try {
+    // Optional: configure ORT paths if needed
+    // ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
+
     aiModels.encoder = await ort.InferenceSession.create("./models/encoder.onnx", {
       executionProviders: ["webgpu", "wasm"]
     });
@@ -473,8 +479,8 @@ async function loadAIModels() {
 
     modelStatus.textContent = "AI Models: Ready";
   } catch (err) {
-    modelStatus.textContent = "AI Models: Failed to load";
     console.error(err);
+    modelStatus.textContent = "AI Models: Failed to load";
   }
 }
 
@@ -515,16 +521,48 @@ async function loadAIModels() {
   return outputBuffer;
 }
 
-async function extractFeaturesStub(pcm) {
-  // For now, just return the PCM as "features"
-  return pcm;
+async function convertWithAI(inputBuffer) {
+  if (!aiModels.encoder || !aiModels.decoder || !aiModels.extractor) {
+    statusEl.textContent = "AI models not loaded yet.";
+    return inputBuffer;
+  }
+
+  statusEl.textContent = "AI: Extracting features…";
+
+  // 1. AudioBuffer → Float32 PCM (mono)
+  const pcm = inputBuffer.getChannelData(0);
+  const extractorInput = new ort.Tensor("float32", pcm, [1, pcm.length]);
+
+  // 2. Feature extractor
+  const featOut = await aiModels.extractor.run({ input: extractorInput });
+  const features = featOut[Object.keys(featOut)[0]].data;
+
+  statusEl.textContent = "AI: Encoding…";
+
+  // 3. Encoder
+  const encInput = new ort.Tensor("float32", features, [1, features.length]);
+  const encOut = await aiModels.encoder.run({ input: encInput });
+  const latent = encOut[Object.keys(encOut)[0]].data;
+
+  statusEl.textContent = "AI: Decoding…";
+
+  // 4. Decoder
+  const decInput = new ort.Tensor("float32", latent, [1, latent.length]);
+  const decOut = await aiModels.decoder.run({ input: decInput });
+  const pcmOut = decOut[Object.keys(decOut)[0]].data;
+
+  // 5. PCM → AudioBuffer
+  const outBuf = audioContext.createBuffer(
+    1,
+    pcmOut.length,
+    inputBuffer.sampleRate
+  );
+  outBuf.getChannelData(0).set(pcmOut);
+
+  statusEl.textContent = "AI filter applied.";
+  return outBuf;
 }
 
-async function runModelStub(features) {
-  // For now, return the input unchanged
-  // Later this will run ONNX Runtime Web with WebGPU
-  return features;
-}
 
 loadAIModels();
 </script>
